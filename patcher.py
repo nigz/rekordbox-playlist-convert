@@ -124,8 +124,10 @@ def convert_file(src: Path, target_format: str, delete_original: bool = True) ->
     try:
         result = subprocess.run(
             cmd,
+            stdin=subprocess.DEVNULL,  # Prevent FFmpeg from waiting for input
             capture_output=True,
-            check=True
+            check=True,
+            timeout=300  # 5 minute timeout per file
         )
         
         if delete_original and dst.exists():
@@ -136,6 +138,8 @@ def convert_file(src: Path, target_format: str, delete_original: bool = True) ->
     except subprocess.CalledProcessError as e:
         error_msg = e.stderr.decode() if e.stderr else str(e)
         return False, dst, src.name, error_msg
+    except subprocess.TimeoutExpired:
+        return False, dst, src.name, "Timeout (>5min)"
 
 
 def convert_all_files(contents_dir: Path, keep_originals: bool = False, max_workers: int = None) -> Tuple[int, int, int, Dict[str, str]]:
