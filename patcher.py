@@ -196,85 +196,43 @@ def convert_all_files(contents_dir: Path, keep_originals: bool = False, max_work
     if max_workers is None:
         max_workers = min(os.cpu_count() or 4, 8)  # Cap at 8 to avoid I/O bottleneck
     
-    print(f"\n🚀 Converting with {max_workers} parallel workers...\n")
+    print(f"\n🚀 Converting with {max_workers} parallel workers...")
     
     success_count = 0
     fail_count = 0
     failed_files: List[str] = []
     total = len(convertible)
     
-    # Worker status display (one line per worker)
     import threading
-    worker_status: Dict[int, str] = {i: "⏳ waiting..." for i in range(max_workers)}
-    status_lock = threading.Lock()
+    progress_lock = threading.Lock()
+    completed = [0]  # Use list to allow mutation in nested function
     
-    def update_display():
-        """Redraw all worker status lines."""
-        # Move cursor up and clear lines
-        lines = list(worker_status.values())
-        print(f"\033[{max_workers}A", end="")  # Move up
-        for i, line in enumerate(lines):
-            print(f"\033[K{line[:70]:<70}")  # Clear line and print (truncate to 70 chars)
-    
-    def do_convert(worker_id: int, audio_file: Path) -> Tuple[bool, str]:
-        """Convert a file and update worker status."""
-        name = audio_file.name[:40]  # Truncate long names
+    def do_convert(audio_file: Path) -> Tuple[bool, str]:
         target_format = get_target_format(audio_file.suffix)
+        success, _, name = convert_file(audio_file, target_format, delete_original=not keep_originals)
         
-        with status_lock:
-            worker_status[worker_id] = f"🔄 {name}"
-            update_display()
+        with progress_lock:
+            completed[0] += 1
+            pct = int(completed[0] / total * 100)
+            bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
+            status = f"\r[{bar}] {completed[0]}/{total} ({pct}%) - {name[:30]:<30}"
+            print(status, end="", flush=True)
         
-        success, _, full_name = convert_file(audio_file, target_format, delete_original=not keep_originals)
-        return success, full_name
+        return success, name
     
-    # Print initial status lines
-    for i in range(max_workers):
-        print(f"⏳ waiting...{' ' * 57}")
-    
-    # Run conversions in parallel with worker tracking
-    from queue import Queue
-    file_queue = Queue()
-    for f in convertible:
-        file_queue.put(f)
-    
-    def worker(worker_id: int):
-        nonlocal success_count, fail_count
-        while True:
-            try:
-                audio_file = file_queue.get_nowait()
-            except:
-                break
-            
-            success, name = do_convert(worker_id, audio_file)
-            
-            with status_lock:
-                done = success_count + fail_count + 1
-                if success:
-                    success_count += 1
-                    worker_status[worker_id] = f"✓ [{done}/{total}] {name[:40]}"
-                else:
-                    fail_count += 1
-                    failed_files.append(name)
-                    worker_status[worker_id] = f"✗ [{done}/{total}] {name[:40]} FAIL"
-                update_display()
-            
-            file_queue.task_done()
+    # Run conversions in parallel
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(do_convert, f) for f in convertible]
         
-        with status_lock:
-            worker_status[worker_id] = "✅ done"
-            update_display()
+        for future in as_completed(futures):
+            success, name = future.result()
+            if success:
+                success_count += 1
+            else:
+                fail_count += 1
+                failed_files.append(name)
     
-    threads = []
-    for i in range(max_workers):
-        t = threading.Thread(target=worker, args=(i,))
-        t.start()
-        threads.append(t)
-    
-    for t in threads:
-        t.join()
-    
-    print()  # New line after progress
+    print()  # New line after progress bar
     
     if failed_files:
         print(f"\n⚠️  Failed files: {', '.join(failed_files)}")
