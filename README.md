@@ -28,8 +28,11 @@ This tool:
 ## Usage
 
 ```bash
-# Full workflow: convert + patch
+# Full workflow (default: converts to local SSD cache then copies to USB)
 python patcher.py /Volumes/MY_USB
+
+# Direct USB conversion (slower but saves local disk space)
+python patcher.py /Volumes/MY_USB --on-device
 
 # Only patch (files already converted manually)
 python patcher.py /Volumes/MY_USB --patch-only
@@ -40,6 +43,13 @@ python patcher.py /Volumes/MY_USB --convert-only
 # Keep originals after conversion
 python patcher.py /Volumes/MY_USB --keep-originals
 ```
+
+## Performance
+
+The script uses two strategies to handle slow USB write speeds:
+
+1.  **SSD Cache (Default)**: files are converted in parallel to a local temp folder (max speed), then bulk copied to the USB.
+2.  **On Device (`--on-device`)**: files are converted directly on the USB with fewer parallel workers (slower, but requires no local disk space).
 
 ## Workflow
 
