@@ -81,7 +81,7 @@ def find_audio_files(contents_dir: Path) -> Tuple[List[Path], List[Path], Set[st
     return convertible, compatible, set()  # Skip unknown detection for speed
 
 
-def convert_file(src: Path, target_format: str, delete_original: bool = True) -> Tuple[bool, Path, str]:
+def convert_file(src: Path, target_format: str, delete_original: bool = True) -> Tuple[bool, Path, str, str]:
     """
     Convert a single audio file to the target format using FFmpeg.
     
@@ -91,13 +91,14 @@ def convert_file(src: Path, target_format: str, delete_original: bool = True) ->
         delete_original: Whether to delete the source file after conversion
         
     Returns:
-        Tuple of (success, output_path, filename)
+        Tuple of (success, output_path, filename, error_msg)
     """
     dst = src.with_suffix(f".{target_format}")
     
     # Base FFmpeg command with optimizations
     base_cmd = [
         "ffmpeg",
+        "-loglevel", "error",  # Only show errors
         "-threads", "0",  # Use all available CPU cores
         "-i", str(src),
     ]
@@ -118,10 +119,10 @@ def convert_file(src: Path, target_format: str, delete_original: bool = True) ->
             str(dst)
         ]
     else:
-        return False, dst, src.name
+        return False, dst, src.name, f"Unsupported format: {target_format}"
     
     try:
-        subprocess.run(
+        result = subprocess.run(
             cmd,
             capture_output=True,
             check=True
@@ -130,10 +131,11 @@ def convert_file(src: Path, target_format: str, delete_original: bool = True) ->
         if delete_original and dst.exists():
             src.unlink()
             
-        return True, dst, src.name
+        return True, dst, src.name, ""
         
     except subprocess.CalledProcessError as e:
-        return False, dst, src.name
+        error_msg = e.stderr.decode() if e.stderr else str(e)
+        return False, dst, src.name, error_msg
 
 
 def convert_all_files(contents_dir: Path, keep_originals: bool = False, max_workers: int = None) -> Tuple[int, int, int, Dict[str, str]]:
@@ -200,12 +202,17 @@ def convert_all_files(contents_dir: Path, keep_originals: bool = False, max_work
     completed = [0]  # Use list to allow mutation in nested function
     
     # Print initial progress bar
-    sys.stdout.write(f"\r[{'░' * 20}] 0/{total} (0%) - Starting...{' ' * 20}")
+    sys.stdout.write(f"\n[{'░' * 20}] 0/{total} (0%) - Starting...{' ' * 20}")
     sys.stdout.flush()
+    
+    errors: List[str] = []
     
     def do_convert(audio_file: Path) -> Tuple[bool, str]:
         target_format = get_target_format(audio_file.suffix)
-        success, _, name = convert_file(audio_file, target_format, delete_original=not keep_originals)
+        success, _, name, error = convert_file(audio_file, target_format, delete_original=not keep_originals)
+        
+        if not success and error:
+            errors.append(f"{name}: {error[:50]}")
         
         with progress_lock:
             completed[0] += 1
@@ -232,7 +239,11 @@ def convert_all_files(contents_dir: Path, keep_originals: bool = False, max_work
     print()  # New line after progress bar
     
     if failed_files:
-        print(f"\n⚠️  Failed files: {', '.join(failed_files)}")
+        print(f"\n⚠️  Failed: {len(failed_files)} file(s)")
+        for err in errors[:5]:  # Show first 5 errors
+            print(f"   {err}")
+        if len(errors) > 5:
+            print(f"   ... and {len(errors) - 5} more")
     
     return success_count, len(compatible), fail_count, ext_mappings
 
