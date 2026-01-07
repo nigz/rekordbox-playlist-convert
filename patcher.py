@@ -200,6 +200,7 @@ def convert_all_files(contents_dir: Path, keep_originals: bool = False, max_work
         print(f"   {count} {ext} → {target}")
     
     # Determine worker count
+    total = len(convertible)
     print(f"\n🚀 Converting {total} file(s)...\n")
     
     success_count = 0
