@@ -65,20 +65,22 @@ def find_audio_files(contents_dir: Path) -> Tuple[List[Path], List[Path], Set[st
     convertible = []
     compatible = []
     
-    # Use specific extension globs for speed (avoid checking every file)
-    for ext in CONVERTIBLE_FORMATS:
-        pattern = f"**/*{ext}"
-        for f in contents_dir.glob(pattern):
-            if not f.name.startswith("._"):  # Skip macOS metadata
-                convertible.append(f)
+    # Use os.walk for fast traversal (faster than glob on USB)
+    for root, dirs, files in os.walk(contents_dir):
+        for name in files:
+            # Skip macOS metadata files
+            if name.startswith("._"):
+                continue
+            
+            ext = os.path.splitext(name)[1].lower()
+            filepath = Path(root) / name
+            
+            if ext in CONVERTIBLE_FORMATS:
+                convertible.append(filepath)
+            elif ext in COMPATIBLE_FORMATS:
+                compatible.append(filepath)
     
-    for ext in COMPATIBLE_FORMATS:
-        pattern = f"**/*{ext}"
-        for f in contents_dir.glob(pattern):
-            if not f.name.startswith("._"):
-                compatible.append(f)
-    
-    return convertible, compatible, set()  # Skip unknown detection for speed
+    return convertible, compatible, set()
 
 
 def convert_file(src: Path, target_format: str, delete_original: bool = True) -> Tuple[bool, Path, str, str]:
