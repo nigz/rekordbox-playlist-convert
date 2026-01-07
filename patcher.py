@@ -196,31 +196,40 @@ def convert_all_files(contents_dir: Path, keep_originals: bool = False, max_work
     if max_workers is None:
         max_workers = min(os.cpu_count() or 4, 8)  # Cap at 8 to avoid I/O bottleneck
     
-    print(f"\n🚀 Converting with {max_workers} parallel workers...")
+    print(f"\n🚀 Converting with {max_workers} parallel workers...\n")
     
     success_count = 0
     fail_count = 0
     failed_files: List[str] = []
+    total = len(convertible)
     
     # Prepare conversion tasks
-    def do_convert(audio_file: Path) -> Tuple[bool, str]:
+    def do_convert(audio_file: Path) -> Tuple[bool, str, str]:
         target_format = get_target_format(audio_file.suffix)
         success, _, name = convert_file(audio_file, target_format, delete_original=not keep_originals)
-        return success, name
+        return success, name, target_format
     
     # Run conversions in parallel
+    import sys
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(do_convert, f): f for f in convertible}
         
         for i, future in enumerate(as_completed(futures), 1):
-            success, name = future.result()
+            success, name, fmt = future.result()
+            done = success_count + fail_count + 1
+            
             if success:
                 success_count += 1
-                print(f"✓ [{i}/{len(convertible)}] {name}")
+                status = f"✓ [{done}/{total}] {name}"
             else:
                 fail_count += 1
                 failed_files.append(name)
-                print(f"✗ [{i}/{len(convertible)}] {name}")
+                status = f"✗ [{done}/{total}] {name} (FAILED)"
+            
+            # Clear line and print status
+            print(f"\r{status:<80}", flush=True)
+    
+    print()  # New line after progress
     
     if failed_files:
         print(f"\n⚠️  Failed files: {', '.join(failed_files)}")
