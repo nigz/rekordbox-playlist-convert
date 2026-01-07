@@ -152,15 +152,15 @@ def convert_file(src: Path, target_format: str, delete_original: bool = True) ->
         return False, dst, src.name, "Timeout (>5min)"
 
 
-def convert_all_files(contents_dir: Path, keep_originals: bool = False, max_workers: int = None) -> Tuple[int, int, int, Dict[str, str]]:
+def convert_all_files(contents_dir: Path, keep_originals: bool = False, max_workers: int = None, on_device: bool = False) -> Tuple[int, int, int, Dict[str, str]]:
     """
-    Convert all audio files in the Contents directory using parallel processing.
-    Auto-selects target format based on source extension length.
+    Convert all audio files. By default uses SSD caching for speed.
     
     Args:
         contents_dir: Directory containing audio files
         keep_originals: Whether to keep original files after conversion
-        max_workers: Max parallel conversions (default: CPU count)
+        max_workers: Max parallel conversions (default: 8 for SSD, 2 for on-device)
+        on_device: If True, convert directly on USB (slower but no temp space needed)
     
     Returns:
         Tuple of (successful_count, skipped_count, failed_count, ext_mappings)
@@ -200,14 +200,26 @@ def convert_all_files(contents_dir: Path, keep_originals: bool = False, max_work
         print(f"   {count} {ext} → {target}")
     
     total = len(convertible)
-    workers = max_workers if max_workers else 2  # Default to 2 parallel workers
-    print(f"\n🚀 Converting {total} file(s) with {workers} workers...\n")
+    
+    if on_device:
+        # Direct on-device conversion (slower)
+        workers = max_workers if max_workers else 2
+        return _convert_on_device(convertible, total, workers, keep_originals, compatible, ext_mappings)
+    else:
+        # SSD-cached conversion (faster)
+        workers = max_workers if max_workers else 8
+        return _convert_with_ssd_cache(convertible, contents_dir, total, workers, keep_originals, compatible, ext_mappings)
+
+
+def _convert_on_device(convertible: List[Path], total: int, workers: int, keep_originals: bool, compatible: List[Path], ext_mappings: Dict[str, str]) -> Tuple[int, int, int, Dict[str, str]]:
+    """Convert files directly on USB (slower, less temp space needed)."""
+    print(f"\n🚀 Converting {total} file(s) on device with {workers} workers...\n")
     
     success_count = 0
     fail_count = 0
     failed_files: List[str] = []
     errors: List[str] = []
-    completed = [0]  # Mutable counter for threads
+    completed = [0]
     
     import threading
     lock = threading.Lock()
@@ -225,12 +237,10 @@ def convert_all_files(contents_dir: Path, keep_originals: bool = False, max_work
         
         return success, name, error
     
-    # Print initial progress
     print(f"[{'░' * 20}] 0/{total} (0%) - Starting...", end="", flush=True)
     
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(convert_one, f) for f in convertible]
-        
         for future in as_completed(futures):
             success, name, error = future.result()
             if success:
@@ -241,14 +251,127 @@ def convert_all_files(contents_dir: Path, keep_originals: bool = False, max_work
                 if error:
                     errors.append(f"{name}: {error[:50]}")
     
-    print()  # New line after progress bar
+    print()
     
     if failed_files:
         print(f"\n⚠️  Failed: {len(failed_files)} file(s)")
         for err in errors[:5]:
             print(f"   {err}")
-        if len(errors) > 5:
-            print(f"   ... and {len(errors) - 5} more")
+    
+    return success_count, len(compatible), fail_count, ext_mappings
+
+
+def _convert_with_ssd_cache(convertible: List[Path], contents_dir: Path, total: int, workers: int, keep_originals: bool, compatible: List[Path], ext_mappings: Dict[str, str]) -> Tuple[int, int, int, Dict[str, str]]:
+    """Convert files using local SSD for speed, then copy to USB."""
+    
+    # Create temp directory in script folder
+    script_dir = Path(__file__).parent
+    temp_dir = script_dir / ".convert_cache"
+    temp_dir.mkdir(exist_ok=True)
+    
+    print(f"\n🚀 Converting {total} file(s) (SSD-cached, {workers} workers)...")
+    print(f"   Cache: {temp_dir}\n")
+    
+    success_count = 0
+    fail_count = 0
+    failed_files: List[str] = []
+    errors: List[str] = []
+    completed = [0]
+    converted_files: List[Tuple[Path, Path]] = []  # (temp_file, usb_dest)
+    
+    import threading
+    lock = threading.Lock()
+    
+    def convert_one(audio_file: Path) -> Tuple[bool, str, str, Path, Path]:
+        """Convert to temp dir, return paths for later copy."""
+        target_format = get_target_format(audio_file.suffix)
+        
+        # Determine paths
+        rel_path = audio_file.relative_to(contents_dir)
+        temp_file = temp_dir / rel_path.with_suffix(f".{target_format}")
+        temp_file.parent.mkdir(parents=True, exist_ok=True)
+        usb_dest = audio_file.with_suffix(f".{target_format}")
+        
+        # Build FFmpeg command
+        base_cmd = [
+            "ffmpeg",
+            "-loglevel", "error",
+            "-threads", "0",
+            "-i", str(audio_file),
+        ]
+        
+        if target_format == "aiff":
+            cmd = base_cmd + ["-c:a", "pcm_s16be", "-y", str(temp_file)]
+        elif target_format == "mp3":
+            cmd = base_cmd + ["-c:a", "libmp3lame", "-b:a", "320k", "-compression_level", "0", "-y", str(temp_file)]
+        else:
+            return False, audio_file.name, f"Unknown format: {target_format}", temp_file, usb_dest
+        
+        try:
+            subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=300)
+            
+            with lock:
+                completed[0] += 1
+                pct = int(completed[0] / total * 100)
+                bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
+                short_name = audio_file.name[:30] if len(audio_file.name) <= 30 else audio_file.name[:27] + "..."
+                print(f"\r[{bar}] {completed[0]}/{total} ({pct}%) - {short_name:<30}", end="", flush=True)
+            
+            return True, audio_file.name, "", temp_file, usb_dest
+            
+        except subprocess.CalledProcessError as e:
+            error_msg = e.stderr.decode() if e.stderr else str(e)
+            return False, audio_file.name, error_msg, temp_file, usb_dest
+        except subprocess.TimeoutExpired:
+            return False, audio_file.name, "Timeout", temp_file, usb_dest
+    
+    # Step 1: Convert all files to SSD (fast, parallel)
+    print(f"[{'░' * 20}] 0/{total} (0%) - Starting...", end="", flush=True)
+    
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(convert_one, f) for f in convertible]
+        for future in as_completed(futures):
+            success, name, error, temp_file, usb_dest = future.result()
+            if success:
+                success_count += 1
+                converted_files.append((temp_file, usb_dest))
+            else:
+                fail_count += 1
+                failed_files.append(name)
+                if error:
+                    errors.append(f"{name}: {error[:50]}")
+    
+    print()
+    
+    if fail_count > 0:
+        print(f"\n⚠️  Failed: {fail_count} file(s)")
+        for err in errors[:5]:
+            print(f"   {err}")
+    
+    # Step 2: Copy converted files to USB
+    if converted_files:
+        print(f"\n📦 Copying {len(converted_files)} file(s) to USB...")
+        print(f"[{'░' * 20}] 0/{len(converted_files)} (0%)", end="", flush=True)
+        
+        for i, (temp_file, usb_dest) in enumerate(converted_files, 1):
+            shutil.copy2(temp_file, usb_dest)
+            
+            pct = int(i / len(converted_files) * 100)
+            bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
+            print(f"\r[{bar}] {i}/{len(converted_files)} ({pct}%)", end="", flush=True)
+        
+        print()
+        
+        # Step 3: Delete originals from USB (if not keeping)
+        if not keep_originals:
+            print(f"🗑️  Removing {len(convertible)} original file(s)...")
+            for audio_file in convertible:
+                if audio_file.exists():
+                    audio_file.unlink()
+        
+        # Step 4: Clean up temp directory
+        print("🧹 Cleaning up cache...")
+        shutil.rmtree(temp_dir, ignore_errors=True)
     
     return success_count, len(compatible), fail_count, ext_mappings
 
@@ -366,6 +489,11 @@ Examples:
         action="store_true",
         help="Keep original files after conversion"
     )
+    parser.add_argument(
+        "--on-device",
+        action="store_true",
+        help="Convert directly on USB (slower, but no temp space needed)"
+    )
     
     args = parser.parse_args()
     
@@ -403,7 +531,8 @@ Examples:
         
         success, skipped, failed, ext_mappings = convert_all_files(
             contents_dir,
-            keep_originals=args.keep_originals
+            keep_originals=args.keep_originals,
+            on_device=args.on_device
         )
         print(f"\n✓ Converted: {success}, Skipped: {skipped}, Failed: {failed}")
         
