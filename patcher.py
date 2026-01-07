@@ -64,30 +64,21 @@ def find_audio_files(contents_dir: Path) -> Tuple[List[Path], List[Path], Set[st
     """
     convertible = []
     compatible = []
-    unknown_exts: Set[str] = set()
     
-    for file in contents_dir.rglob("*"):
-        if not file.is_file():
-            continue
-        
-        # Skip macOS AppleDouble metadata files (._filename)
-        if file.name.startswith("._"):
-            continue
-            
-        ext = file.suffix.lower()
-        
-        if ext in CONVERTIBLE_FORMATS:
-            convertible.append(file)
-        elif ext in COMPATIBLE_FORMATS:
-            compatible.append(file)
-        elif ext and not ext.startswith("."):
-            # Skip non-files
-            continue
-        elif ext and ext not in {".db", ".pdb", ".xml", ".txt", ".dat", ".edb"}:
-            # Track unknown extensions (ignore known non-audio files)
-            unknown_exts.add(ext)
+    # Use specific extension globs for speed (avoid checking every file)
+    for ext in CONVERTIBLE_FORMATS:
+        pattern = f"**/*{ext}"
+        for f in contents_dir.glob(pattern):
+            if not f.name.startswith("._"):  # Skip macOS metadata
+                convertible.append(f)
     
-    return convertible, compatible, unknown_exts
+    for ext in COMPATIBLE_FORMATS:
+        pattern = f"**/*{ext}"
+        for f in contents_dir.glob(pattern):
+            if not f.name.startswith("._"):
+                compatible.append(f)
+    
+    return convertible, compatible, set()  # Skip unknown detection for speed
 
 
 def convert_file(src: Path, target_format: str, delete_original: bool = True) -> Tuple[bool, Path, str]:
@@ -204,8 +195,13 @@ def convert_all_files(contents_dir: Path, keep_originals: bool = False, max_work
     total = len(convertible)
     
     import threading
+    import sys
     progress_lock = threading.Lock()
     completed = [0]  # Use list to allow mutation in nested function
+    
+    # Print initial progress bar
+    sys.stdout.write(f"\r[{'░' * 20}] 0/{total} (0%) - Starting...{' ' * 20}")
+    sys.stdout.flush()
     
     def do_convert(audio_file: Path) -> Tuple[bool, str]:
         target_format = get_target_format(audio_file.suffix)
@@ -215,8 +211,9 @@ def convert_all_files(contents_dir: Path, keep_originals: bool = False, max_work
             completed[0] += 1
             pct = int(completed[0] / total * 100)
             bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
-            status = f"\r[{bar}] {completed[0]}/{total} ({pct}%) - {name[:30]:<30}"
-            print(status, end="", flush=True)
+            short_name = name[:30] if len(name) <= 30 else name[:27] + "..."
+            sys.stdout.write(f"\r[{bar}] {completed[0]}/{total} ({pct}%) - {short_name:<30}")
+            sys.stdout.flush()
         
         return success, name
     
