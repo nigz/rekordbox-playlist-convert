@@ -1,25 +1,20 @@
-# Next Steps: Fixing "File Type" Display
+# Next Steps: Finishing Polish
 
-## Current Status
-- **Conversion**: Files are correctly converted (FLAC → AIFF).
-- **Playback**: Tracks play correctly on CDJ.
-- **Waveforms**: Analysis files are patched; waveforms and grids load correctly.
-- **Issue**: CDJ track info still says **"File Type: FLAC"** (even though it's an AIFF).
-
-## Technical Findings
-In `export.pdb`, the byte immediately following the filename string acts as a "File Type ID":
-- **FLAC**: `0xBB`
-- **MP3**: `0x73`
-
-Currently, we update the filename extension (`.flac` → `.aiff`) but leave this ID byte as `0xBB`. This causes the CDJ to display the wrong label.
-
-## Next Step
-We need to find the correct ID byte for **AIFF**.
+## 1. Fix "File Type" Display
+**Issue**: CDJ shows "File Type: FLAC" for converted AIFF files.
+**Cause**: `export.pdb` has a "File Type ID" byte after the filename (`0xBB`=FLAC, `0x73`=MP3). We need to change this to the AIFF ID.
 
 ### Action Item
 1.  **Export one AIFF track** from Rekordbox to a USB stick.
-2.  **Share the `PIONEER` folder** from that USB.
-3.  I will analyze the `export.pdb` to find the ID byte for AIFF.
-4.  I will update `patcher.py` to replace `0xBB` (FLAC) with the new AIFF ID.
+2.  **Share the `PIONEER` folder**.
+3.  I will find the AIFF ID in `export.pdb` and update the patcher.
 
-Once done, the CDJ will correctly display "File Type: AIFF".
+## 2. Display Detected Playlists
+**Goal**: The script should list the names of playlists found on the USB (e.g., "PHASE") to confirm what is being processed.
+
+### Technical Detail
+- Playlist names (like "PHASE") are visible in `export.pdb`.
+- We need to identify the exact structure/offset to extract and list them reliably.
+
+### Action Item
+- Analyze `export.pdb` structure further to locate the playlist table and extract names for the CLI summary.
