@@ -203,27 +203,78 @@ def convert_all_files(contents_dir: Path, keep_originals: bool = False, max_work
     failed_files: List[str] = []
     total = len(convertible)
     
-    # Prepare conversion tasks
-    def do_convert(audio_file: Path) -> Tuple[bool, str, str]:
-        target_format = get_target_format(audio_file.suffix)
-        success, _, name = convert_file(audio_file, target_format, delete_original=not keep_originals)
-        return success, name, target_format
+    # Worker status display (one line per worker)
+    import threading
+    worker_status: Dict[int, str] = {i: "⏳ waiting..." for i in range(max_workers)}
+    status_lock = threading.Lock()
     
-    # Run conversions in parallel
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(do_convert, f): f for f in convertible}
+    def update_display():
+        """Redraw all worker status lines."""
+        # Move cursor up and clear lines
+        lines = list(worker_status.values())
+        print(f"\033[{max_workers}A", end="")  # Move up
+        for i, line in enumerate(lines):
+            print(f"\033[K{line[:70]:<70}")  # Clear line and print (truncate to 70 chars)
+    
+    def do_convert(worker_id: int, audio_file: Path) -> Tuple[bool, str]:
+        """Convert a file and update worker status."""
+        name = audio_file.name[:40]  # Truncate long names
+        target_format = get_target_format(audio_file.suffix)
         
-        for i, future in enumerate(as_completed(futures), 1):
-            success, name, fmt = future.result()
-            done = success_count + fail_count + 1
+        with status_lock:
+            worker_status[worker_id] = f"🔄 {name}"
+            update_display()
+        
+        success, _, full_name = convert_file(audio_file, target_format, delete_original=not keep_originals)
+        return success, full_name
+    
+    # Print initial status lines
+    for i in range(max_workers):
+        print(f"⏳ waiting...{' ' * 57}")
+    
+    # Run conversions in parallel with worker tracking
+    from queue import Queue
+    file_queue = Queue()
+    for f in convertible:
+        file_queue.put(f)
+    
+    def worker(worker_id: int):
+        nonlocal success_count, fail_count
+        while True:
+            try:
+                audio_file = file_queue.get_nowait()
+            except:
+                break
             
-            if success:
-                success_count += 1
-                print(f"✓ [{done}/{total}] {name}", flush=True)
-            else:
-                fail_count += 1
-                failed_files.append(name)
-                print(f"✗ [{done}/{total}] {name} (FAILED)", flush=True)
+            success, name = do_convert(worker_id, audio_file)
+            
+            with status_lock:
+                done = success_count + fail_count + 1
+                if success:
+                    success_count += 1
+                    worker_status[worker_id] = f"✓ [{done}/{total}] {name[:40]}"
+                else:
+                    fail_count += 1
+                    failed_files.append(name)
+                    worker_status[worker_id] = f"✗ [{done}/{total}] {name[:40]} FAIL"
+                update_display()
+            
+            file_queue.task_done()
+        
+        with status_lock:
+            worker_status[worker_id] = "✅ done"
+            update_display()
+    
+    threads = []
+    for i in range(max_workers):
+        t = threading.Thread(target=worker, args=(i,))
+        t.start()
+        threads.append(t)
+    
+    for t in threads:
+        t.join()
+    
+    print()  # New line after progress
     
     if failed_files:
         print(f"\n⚠️  Failed files: {', '.join(failed_files)}")
