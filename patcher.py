@@ -199,35 +199,44 @@ def convert_all_files(contents_dir: Path, keep_originals: bool = False, max_work
         target = ext_mappings[ext]
         print(f"   {count} {ext} → {target}")
     
-    # Determine worker count
     total = len(convertible)
-    print(f"\n🚀 Converting {total} file(s)...\n")
+    workers = max_workers if max_workers else 2  # Default to 2 parallel workers
+    print(f"\n🚀 Converting {total} file(s) with {workers} workers...\n")
     
     success_count = 0
     fail_count = 0
     failed_files: List[str] = []
     errors: List[str] = []
+    completed = [0]  # Mutable counter for threads
     
-    for i, audio_file in enumerate(convertible, 1):
+    import threading
+    lock = threading.Lock()
+    
+    def convert_one(audio_file: Path) -> Tuple[bool, str, str]:
         target_format = get_target_format(audio_file.suffix)
-        name = audio_file.name
-        short_name = name[:35] if len(name) <= 35 else name[:32] + "..."
+        success, _, name, error = convert_file(audio_file, target_format, delete_original=not keep_originals)
         
-        # Show progress
-        pct = int(i / total * 100)
-        bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
-        print(f"\r[{bar}] {i}/{total} ({pct}%) - {short_name:<35}", end="", flush=True)
+        with lock:
+            completed[0] += 1
+            pct = int(completed[0] / total * 100)
+            bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
+            short_name = name[:30] if len(name) <= 30 else name[:27] + "..."
+            print(f"\r[{bar}] {completed[0]}/{total} ({pct}%) - {short_name:<30}", end="", flush=True)
         
-        # Convert
-        success, _, _, error = convert_file(audio_file, target_format, delete_original=not keep_originals)
+        return success, name, error
+    
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(convert_one, f) for f in convertible]
         
-        if success:
-            success_count += 1
-        else:
-            fail_count += 1
-            failed_files.append(name)
-            if error:
-                errors.append(f"{name}: {error[:50]}")
+        for future in as_completed(futures):
+            success, name, error = future.result()
+            if success:
+                success_count += 1
+            else:
+                fail_count += 1
+                failed_files.append(name)
+                if error:
+                    errors.append(f"{name}: {error[:50]}")
     
     print()  # New line after progress bar
     
