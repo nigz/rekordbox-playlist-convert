@@ -425,26 +425,34 @@ def patch_pdb(file_path: Path, old_ext: str, new_ext: str) -> bool:
     return True
 
 
-def find_usb_paths(usb_path: Path) -> Tuple[Path, Path]:
+def find_usb_paths(usb_path: Path) -> Tuple[Path, List[Path]]:
     """
-    Find the Contents and export.pdb paths from a USB root.
+    Find the Contents and all relevant PDB paths from a USB root.
     
     Args:
         usb_path: Path to USB root (e.g., /Volumes/MY_USB)
         
     Returns:
-        Tuple of (contents_dir, pdb_path)
+        Tuple of (contents_dir, list_of_pdb_paths)
     """
     contents_dir = usb_path / "Contents"
-    pdb_path = usb_path / "PIONEER" / "rekordbox" / "export.pdb"
     
-    # Try alternate casing
-    if not pdb_path.exists():
-        pdb_path = usb_path / "PIONEER" / "Rekordbox" / "export.pdb"
-    if not pdb_path.exists():
-        pdb_path = usb_path / "PIONEER" / "REKORDBOX" / "export.pdb"
+    # Check casing for PIONEER/rekordbox
+    rekordbox_dir = usb_path / "PIONEER" / "rekordbox"
+    if not rekordbox_dir.exists():
+        rekordbox_dir = usb_path / "PIONEER" / "Rekordbox"
+    if not rekordbox_dir.exists():
+        rekordbox_dir = usb_path / "PIONEER" / "REKORDBOX"
     
-    return contents_dir, pdb_path
+    pdb_paths = []
+    if rekordbox_dir.exists():
+        # We need to patch export.pdb AND exportExt.pdb (contains beatgrids)
+        for name in ["export.pdb", "exportExt.pdb"]:
+            pdb = rekordbox_dir / name
+            if pdb.exists():
+                pdb_paths.append(pdb)
+    
+    return contents_dir, pdb_paths
 
 
 def main():
@@ -466,6 +474,9 @@ Examples:
   
   # Only convert files (don't patch database)
   python patcher.py /Volumes/MY_USB --convert-only
+  
+  # Keep originals after conversion
+  python patcher.py /Volumes/MY_USB --keep-originals
 """
     )
     
@@ -503,7 +514,7 @@ Examples:
         sys.exit(1)
     
     # Find paths
-    contents_dir, pdb_path = find_usb_paths(args.usb_path)
+    contents_dir, pdb_paths = find_usb_paths(args.usb_path)
     
     # Check FFmpeg if we need to convert
     if not args.patch_only:
@@ -517,8 +528,8 @@ Examples:
     
     # Check PDB if we need to patch
     if not args.convert_only:
-        if not pdb_path.exists():
-            print(f"Error: export.pdb not found: {pdb_path}")
+        if not pdb_paths:
+            print(f"Error: No export.pdb or exportExt.pdb found in PIONEER/rekordbox location.")
             sys.exit(1)
     
     print(f"USB: {args.usb_path}")
@@ -539,30 +550,51 @@ Examples:
         if failed > 0 and not args.convert_only:
             print("Warning: Some files failed to convert. Database may be inconsistent.")
     
-    # Step 2: Patch database
+    # Step 2: Patch Database
     if not args.convert_only:
         print("\n📝 Patching database...")
         
-        # Use mappings from conversion, or scan for defaults if patch-only
         if not ext_mappings:
-            # Patch-only mode: try all known convertible formats
-            for old_ext in CONVERTIBLE_FORMATS:
-                target = get_target_format(old_ext)
-                if target:
-                    ext_mappings[old_ext] = f".{target}"
+            # If we didn't run conversion, scan convertible files to infer what mappings are needed
+            # Or we could just attempt patching common mappings:
+            # FLAC->AIFF, ALAC->AIFF, M4A->MP3, etc.
+            # For simplicity, let's look for convertible files again to build the map if empty
+            if not args.patch_only: # If we just converted, mappings might be empty if no files needed conversion
+                pass # Already empty
+            else:
+                # If patch-only, we need to infer mappings or assume standard ones
+                print("   (Inferring mappings for patch-only mode...)")
+                ext_mappings = {
+                    ".flac": ".aiff",
+                    ".alac": ".aiff",
+                    ".m4a": ".mp3",
+                    ".ogg": ".mp3",
+                    ".wma": ".mp3"
+                }
         
-        patched_any = False
-        for old_ext, new_ext in sorted(ext_mappings.items()):
-            if patch_pdb(pdb_path, old_ext, new_ext):
-                patched_any = True
-        
-        if patched_any:
-            print("\n✅ Done! USB is ready for CDJ.")
+        if not ext_mappings:
+            print("   No text mappings found/needed. Skipping patch.")
         else:
-            print("\n✅ Done! No database changes needed.")
+            total_patched_files = 0
+            for pdb_path in pdb_paths:
+                print(f"   Target: {pdb_path.name}")
+                patched_any = False
+                
+                for old_ext, new_ext in ext_mappings.items():
+                    print(f"   Patching: {old_ext} → {new_ext}")
+                    if patch_pdb(pdb_path, old_ext, new_ext):
+                        patched_any = True
+                
+                if patched_any:
+                    total_patched_files += 1
+            
+            if total_patched_files == 0:
+                print("   ⚠️  No changes made to any PDB files.")
+            else:
+                print("   ✓ Database patching complete.")
+
+    print("\n✅ All done! USB is ready for CDJ.")
 
 
 if __name__ == "__main__":
     main()
-
-
