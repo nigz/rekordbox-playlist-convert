@@ -13,6 +13,7 @@ import subprocess
 import argparse
 from pathlib import Path
 from typing import List, Tuple, Dict, Set
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Formats that need conversion to AIFF (5 chars → 5 chars)
 CONVERT_TO_AIFF = {".flac", ".alac"}
@@ -89,7 +90,7 @@ def find_audio_files(contents_dir: Path) -> Tuple[List[Path], List[Path], Set[st
     return convertible, compatible, unknown_exts
 
 
-def convert_file(src: Path, target_format: str, delete_original: bool = True) -> Tuple[bool, Path]:
+def convert_file(src: Path, target_format: str, delete_original: bool = True) -> Tuple[bool, Path, str]:
     """
     Convert a single audio file to the target format using FFmpeg.
     
@@ -99,32 +100,37 @@ def convert_file(src: Path, target_format: str, delete_original: bool = True) ->
         delete_original: Whether to delete the source file after conversion
         
     Returns:
-        Tuple of (success, output_path)
+        Tuple of (success, output_path, filename)
     """
     dst = src.with_suffix(f".{target_format}")
     
+    # Base FFmpeg command with optimizations
+    base_cmd = [
+        "ffmpeg",
+        "-threads", "0",  # Use all available CPU cores
+        "-i", str(src),
+    ]
+    
     # FFmpeg command based on target format
     if target_format == "aiff":
-        cmd = [
-            "ffmpeg", "-i", str(src),
+        cmd = base_cmd + [
             "-c:a", "pcm_s16be",  # Standard AIFF codec
             "-y",  # Overwrite
             str(dst)
         ]
     elif target_format == "mp3":
-        cmd = [
-            "ffmpeg", "-i", str(src),
+        cmd = base_cmd + [
             "-c:a", "libmp3lame",
             "-b:a", "320k",  # CBR 320kbps
+            "-compression_level", "0",  # Fastest encoding
             "-y",
             str(dst)
         ]
     else:
-        print(f"Error: Unsupported format '{target_format}'")
-        return False, dst
+        return False, dst, src.name
     
     try:
-        result = subprocess.run(
+        subprocess.run(
             cmd,
             capture_output=True,
             check=True
@@ -133,17 +139,21 @@ def convert_file(src: Path, target_format: str, delete_original: bool = True) ->
         if delete_original and dst.exists():
             src.unlink()
             
-        return True, dst
+        return True, dst, src.name
         
     except subprocess.CalledProcessError as e:
-        print(f"Error converting {src.name}: {e.stderr.decode()}")
-        return False, dst
+        return False, dst, src.name
 
 
-def convert_all_files(contents_dir: Path, keep_originals: bool = False) -> Tuple[int, int, int, Dict[str, str]]:
+def convert_all_files(contents_dir: Path, keep_originals: bool = False, max_workers: int = None) -> Tuple[int, int, int, Dict[str, str]]:
     """
-    Convert all audio files in the Contents directory.
+    Convert all audio files in the Contents directory using parallel processing.
     Auto-selects target format based on source extension length.
+    
+    Args:
+        contents_dir: Directory containing audio files
+        keep_originals: Whether to keep original files after conversion
+        max_workers: Max parallel conversions (default: CPU count)
     
     Returns:
         Tuple of (successful_count, skipped_count, failed_count, ext_mappings)
@@ -182,18 +192,38 @@ def convert_all_files(contents_dir: Path, keep_originals: bool = False) -> Tuple
         target = ext_mappings[ext]
         print(f"   {count} {ext} → {target}")
     
+    # Determine worker count
+    if max_workers is None:
+        max_workers = min(os.cpu_count() or 4, 8)  # Cap at 8 to avoid I/O bottleneck
+    
+    print(f"\n🚀 Converting with {max_workers} parallel workers...")
+    
     success_count = 0
     fail_count = 0
+    failed_files: List[str] = []
     
-    for i, audio_file in enumerate(convertible, 1):
+    # Prepare conversion tasks
+    def do_convert(audio_file: Path) -> Tuple[bool, str]:
         target_format = get_target_format(audio_file.suffix)
-        print(f"[{i}/{len(convertible)}] {audio_file.name} → .{target_format}")
-        success, _ = convert_file(audio_file, target_format, delete_original=not keep_originals)
+        success, _, name = convert_file(audio_file, target_format, delete_original=not keep_originals)
+        return success, name
+    
+    # Run conversions in parallel
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(do_convert, f): f for f in convertible}
         
-        if success:
-            success_count += 1
-        else:
-            fail_count += 1
+        for i, future in enumerate(as_completed(futures), 1):
+            success, name = future.result()
+            if success:
+                success_count += 1
+                print(f"✓ [{i}/{len(convertible)}] {name}")
+            else:
+                fail_count += 1
+                failed_files.append(name)
+                print(f"✗ [{i}/{len(convertible)}] {name}")
+    
+    if failed_files:
+        print(f"\n⚠️  Failed files: {', '.join(failed_files)}")
     
     return success_count, len(compatible), fail_count, ext_mappings
 
