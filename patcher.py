@@ -192,61 +192,39 @@ def convert_all_files(contents_dir: Path, keep_originals: bool = False, max_work
         print(f"   {count} {ext} → {target}")
     
     # Determine worker count
-    if max_workers is None:
-        max_workers = min(os.cpu_count() or 4, 8)  # Cap at 8 to avoid I/O bottleneck
-    
-    print(f"\n🚀 Converting with {max_workers} parallel workers...")
+    print(f"\n🚀 Converting {total} file(s)...\n")
     
     success_count = 0
     fail_count = 0
     failed_files: List[str] = []
-    total = len(convertible)
-    
-    import threading
-    import sys
-    progress_lock = threading.Lock()
-    completed = [0]  # Use list to allow mutation in nested function
-    
-    # Print initial progress bar
-    sys.stdout.write(f"\n[{'░' * 20}] 0/{total} (0%) - Starting...{' ' * 20}")
-    sys.stdout.flush()
-    
     errors: List[str] = []
     
-    def do_convert(audio_file: Path) -> Tuple[bool, str]:
+    for i, audio_file in enumerate(convertible, 1):
         target_format = get_target_format(audio_file.suffix)
-        success, _, name, error = convert_file(audio_file, target_format, delete_original=not keep_originals)
+        name = audio_file.name
+        short_name = name[:35] if len(name) <= 35 else name[:32] + "..."
         
-        if not success and error:
-            errors.append(f"{name}: {error[:50]}")
+        # Show progress
+        pct = int(i / total * 100)
+        bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
+        print(f"\r[{bar}] {i}/{total} ({pct}%) - {short_name:<35}", end="", flush=True)
         
-        with progress_lock:
-            completed[0] += 1
-            pct = int(completed[0] / total * 100)
-            bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
-            short_name = name[:30] if len(name) <= 30 else name[:27] + "..."
-            sys.stdout.write(f"\r[{bar}] {completed[0]}/{total} ({pct}%) - {short_name:<30}")
-            sys.stdout.flush()
+        # Convert
+        success, _, _, error = convert_file(audio_file, target_format, delete_original=not keep_originals)
         
-        return success, name
-    
-    # Run conversions in parallel
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(do_convert, f) for f in convertible]
-        
-        for future in as_completed(futures):
-            success, name = future.result()
-            if success:
-                success_count += 1
-            else:
-                fail_count += 1
-                failed_files.append(name)
+        if success:
+            success_count += 1
+        else:
+            fail_count += 1
+            failed_files.append(name)
+            if error:
+                errors.append(f"{name}: {error[:50]}")
     
     print()  # New line after progress bar
     
     if failed_files:
         print(f"\n⚠️  Failed: {len(failed_files)} file(s)")
-        for err in errors[:5]:  # Show first 5 errors
+        for err in errors[:5]:
             print(f"   {err}")
         if len(errors) > 5:
             print(f"   ... and {len(errors) - 5} more")
