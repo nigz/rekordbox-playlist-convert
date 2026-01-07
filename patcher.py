@@ -213,7 +213,7 @@ def convert_all_files(contents_dir: Path, keep_originals: bool = False, max_work
 
 def _convert_on_device(convertible: List[Path], total: int, workers: int, keep_originals: bool, compatible: List[Path], ext_mappings: Dict[str, str]) -> Tuple[int, int, int, Dict[str, str]]:
     """Convert files directly on USB (slower, less temp space needed)."""
-    print(f"\n🚀 Converting {total} file(s) on device with {workers} workers...\n")
+    print(f"\nConverting {total} file(s) on device with {workers} workers...\n")
     
     success_count = 0
     fail_count = 0
@@ -269,7 +269,7 @@ def _convert_with_ssd_cache(convertible: List[Path], contents_dir: Path, total: 
     temp_dir = script_dir / ".convert_cache"
     temp_dir.mkdir(exist_ok=True)
     
-    print(f"\n🚀 Converting {total} file(s) (SSD-cached, {workers} workers)...")
+    print(f"\n Converting {total} file(s) (Cached, {workers} workers)...")
     print(f"   Cache: {temp_dir}\n")
     
     success_count = 0
@@ -350,7 +350,7 @@ def _convert_with_ssd_cache(convertible: List[Path], contents_dir: Path, total: 
     
     # Step 2: Copy converted files to USB
     if converted_files:
-        print(f"\n📦 Copying {len(converted_files)} file(s) to USB...")
+        print(f"\nCopying {len(converted_files)} file(s) to USB...")
         print(f"[{'░' * 20}] 0/{len(converted_files)} (0%)", end="", flush=True)
         
         for i, (temp_file, usb_dest) in enumerate(converted_files, 1):
@@ -364,7 +364,7 @@ def _convert_with_ssd_cache(convertible: List[Path], contents_dir: Path, total: 
         
         # Step 3: Delete originals from USB (if not keeping)
         if not keep_originals:
-            print(f"🗑️  Removing {len(convertible)} original file(s)...")
+            print(f"Removing {len(convertible)} original file(s)...")
             for audio_file in convertible:
                 if audio_file.exists():
                     audio_file.unlink()
@@ -608,7 +608,7 @@ Examples:
     # Step 1: Convert files
     ext_mappings: Dict[str, str] = {}
     if not args.patch_only:
-        print("\n📀 Scanning for audio files...")
+        print("\nScanning for audio files...")
         
         success, skipped, failed, ext_mappings = convert_all_files(
             contents_dir,
@@ -622,7 +622,7 @@ Examples:
     
     # Step 2: Patch Database and Analysis files
     if not args.convert_only:
-        print("\n📝 Patching databases and analysis files...")
+        print("\nPatching databases and analysis files...")
         
         if not ext_mappings:
             # If we didn't run conversion, scan convertible files to infer what mappings are needed
@@ -674,7 +674,7 @@ Examples:
             else:
                 print("   ✓ Patching complete.")
 
-    print("\n✅ All done! USB is ready for CDJ.")
+    print("\nAll done! USB is ready for CDJ.")
 
 
 if __name__ == "__main__":
