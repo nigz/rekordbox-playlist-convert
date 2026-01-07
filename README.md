@@ -1,17 +1,24 @@
 # Rekordbox Playlist Convert
 
-Convert FLAC tracks to AIFF/MP3 for Rekordbox USB exports while preserving all hot cues, memory points, and beatgrids.
+Convert audio files on Rekordbox USB exports for CDJ compatibility while preserving all hot cues, memory points, and beatgrids.
 
 ## The Problem
 
-CDJ-2000 Nexus 1 and older players don't support FLAC. If you maintain a FLAC library in Rekordbox, you need to convert files when exporting—but re-importing breaks your carefully set cue points.
+CDJ-2000 Nexus 1 and older players don't support FLAC. Re-importing to convert breaks your carefully set cue points.
 
 ## The Solution
 
 This tool:
-1. Converts FLAC files on the USB to AIFF or MP3 using FFmpeg
-2. Patches the `export.pdb` database to update file references
+1. Converts files on the USB using FFmpeg
+2. Patches the `export.pdb` database to update references
 3. Preserves all your cues and beatgrids perfectly
+
+**Format mapping** (based on extension length to preserve DB offsets):
+| Source | Target |
+|--------|--------|
+| FLAC, ALAC | AIFF |
+| M4A, OGG, WMA | MP3 |
+| WAV, MP3, AIFF | *(kept as-is)* |
 
 ## Requirements
 
@@ -21,33 +28,24 @@ This tool:
 ## Usage
 
 ```bash
-# Full workflow: convert files + patch database
+# Full workflow: convert + patch
 python patcher.py /Volumes/MY_USB
 
-# Convert to MP3 instead of AIFF (320kbps CBR)
-python patcher.py /Volumes/MY_USB --format mp3
-
-# Only patch database (if files already converted via XLD)
+# Only patch (files already converted manually)
 python patcher.py /Volumes/MY_USB --patch-only
 
-# Only convert files (skip database patching)
+# Only convert (skip database patching)
 python patcher.py /Volumes/MY_USB --convert-only
 
-# Keep original FLACs after conversion
+# Keep originals after conversion
 python patcher.py /Volumes/MY_USB --keep-originals
 ```
 
 ## Workflow
 
-1. Export your playlist to USB from Rekordbox as normal
+1. Export your playlist to USB from Rekordbox
 2. Run: `python patcher.py /Volumes/YOUR_USB`
 3. Eject and plug into your CDJ ✅
-
-## Why AIFF?
-
-- Same byte-length as FLAC (`.aiff` = 5 chars = `.flac`)
-- Supports full metadata/cues unlike WAV
-- Compatible with every CDJ that doesn't support FLAC
 
 ## License
 

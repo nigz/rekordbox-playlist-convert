@@ -14,14 +14,31 @@ import argparse
 from pathlib import Path
 from typing import List, Tuple, Dict, Set
 
-# Known audio formats that can be converted
-CONVERTIBLE_FORMATS = {".flac", ".wav", ".m4a", ".ogg", ".wma", ".alac"}
+# Formats that need conversion to AIFF (5 chars → 5 chars)
+CONVERT_TO_AIFF = {".flac", ".alac"}
 
-# Formats already compatible (no conversion needed, just patch DB if needed)  
-COMPATIBLE_FORMATS = {".mp3", ".aiff", ".aif"}
+# Formats that need conversion to MP3 (4 chars → 4 chars)  
+CONVERT_TO_MP3 = {".m4a", ".ogg", ".wma"}
+
+# Formats already compatible (no conversion needed)
+COMPATIBLE_FORMATS = {".mp3", ".aiff", ".aif", ".wav"}
+
+# All convertible formats
+CONVERTIBLE_FORMATS = CONVERT_TO_AIFF | CONVERT_TO_MP3
 
 # All known audio formats
 KNOWN_AUDIO_FORMATS = CONVERTIBLE_FORMATS | COMPATIBLE_FORMATS
+
+
+def get_target_format(src_ext: str) -> str:
+    """Get the appropriate target format based on source extension."""
+    src_ext = src_ext.lower()
+    if src_ext in CONVERT_TO_AIFF:
+        return "aiff"
+    elif src_ext in CONVERT_TO_MP3:
+        return "mp3"
+    else:
+        return ""  # No conversion needed
 
 
 def check_ffmpeg() -> bool:
@@ -119,12 +136,13 @@ def convert_file(src: Path, target_format: str, delete_original: bool = True) ->
         return False, dst
 
 
-def convert_all_files(contents_dir: Path, target_format: str, keep_originals: bool = False) -> Tuple[int, int, int]:
+def convert_all_files(contents_dir: Path, keep_originals: bool = False) -> Tuple[int, int, int, Dict[str, str]]:
     """
     Convert all audio files in the Contents directory.
+    Auto-selects target format based on source extension length.
     
     Returns:
-        Tuple of (successful_count, skipped_count, failed_count)
+        Tuple of (successful_count, skipped_count, failed_count, ext_mappings)
     """
     convertible, compatible, unknown_exts = find_audio_files(contents_dir)
     
@@ -135,26 +153,37 @@ def convert_all_files(contents_dir: Path, target_format: str, keep_originals: bo
     
     # Report compatible files
     if compatible:
-        print(f"Found {len(compatible)} file(s) already in compatible format")
+        by_compat: Dict[str, int] = {}
+        for f in compatible:
+            ext = f.suffix.lower()
+            by_compat[ext] = by_compat.get(ext, 0) + 1
+        compat_summary = ", ".join(f"{count} {ext}" for ext, count in sorted(by_compat.items()))
+        print(f"Found {len(compatible)} file(s) already compatible: {compat_summary}")
     
     if not convertible:
         print("No files need conversion.")
-        return 0, len(compatible), 0
+        return 0, len(compatible), 0, {}
     
-    # Group by extension for reporting
+    # Group by extension and show conversion plan
     by_ext: Dict[str, int] = {}
+    ext_mappings: Dict[str, str] = {}  # old_ext -> new_ext
     for f in convertible:
         ext = f.suffix.lower()
         by_ext[ext] = by_ext.get(ext, 0) + 1
+        if ext not in ext_mappings:
+            ext_mappings[ext] = f".{get_target_format(ext)}"
     
-    ext_summary = ", ".join(f"{count} {ext}" for ext, count in sorted(by_ext.items()))
-    print(f"Found {len(convertible)} file(s) to convert: {ext_summary}")
+    print(f"Found {len(convertible)} file(s) to convert:")
+    for ext, count in sorted(by_ext.items()):
+        target = ext_mappings[ext]
+        print(f"   {count} {ext} → {target}")
     
     success_count = 0
     fail_count = 0
     
     for i, audio_file in enumerate(convertible, 1):
-        print(f"[{i}/{len(convertible)}] Converting: {audio_file.name}")
+        target_format = get_target_format(audio_file.suffix)
+        print(f"[{i}/{len(convertible)}] {audio_file.name} → .{target_format}")
         success, _ = convert_file(audio_file, target_format, delete_original=not keep_originals)
         
         if success:
@@ -162,7 +191,7 @@ def convert_all_files(contents_dir: Path, target_format: str, keep_originals: bo
         else:
             fail_count += 1
     
-    return success_count, len(compatible), fail_count
+    return success_count, len(compatible), fail_count, ext_mappings
 
 
 def patch_pdb(file_path: Path, old_ext: str, new_ext: str) -> bool:
@@ -238,17 +267,19 @@ def find_usb_paths(usb_path: Path) -> Tuple[Path, Path]:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Convert FLAC files and patch Rekordbox export.pdb",
+        description="Convert audio files and patch Rekordbox export.pdb",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+Auto-converts based on extension length (to preserve DB offsets):
+  FLAC, ALAC (5 chars) → AIFF (5 chars)
+  M4A, OGG, WMA (4 chars) → MP3 (4 chars)
+  WAV, MP3, AIFF → kept as-is (already compatible)
+
 Examples:
   # Full workflow: convert files and patch database
   python patcher.py /Volumes/MY_USB
   
-  # Convert to MP3 instead of AIFF
-  python patcher.py /Volumes/MY_USB --format mp3
-  
-  # Only patch the database (files already converted)
+  # Only patch the database (files already converted manually)
   python patcher.py /Volumes/MY_USB --patch-only
   
   # Only convert files (don't patch database)
@@ -260,12 +291,6 @@ Examples:
         "usb_path",
         type=Path,
         help="Path to USB drive root (e.g., /Volumes/MY_USB)"
-    )
-    parser.add_argument(
-        "--format", "-f",
-        choices=["aiff", "mp3"],
-        default="aiff",
-        help="Target audio format (default: aiff)"
     )
     parser.add_argument(
         "--patch-only",
@@ -280,7 +305,7 @@ Examples:
     parser.add_argument(
         "--keep-originals",
         action="store_true",
-        help="Keep original FLAC files after conversion"
+        help="Keep original files after conversion"
     )
     
     args = parser.parse_args()
@@ -310,21 +335,15 @@ Examples:
             sys.exit(1)
     
     print(f"USB: {args.usb_path}")
-    print(f"Target format: {args.format.upper()}")
     print("-" * 40)
     
     # Step 1: Convert files
-    converted_exts: Set[str] = set()
+    ext_mappings: Dict[str, str] = {}
     if not args.patch_only:
         print("\n📀 Scanning for audio files...")
         
-        # Get list of what we'll convert for patching later
-        convertible, _, _ = find_audio_files(contents_dir)
-        converted_exts = {f.suffix.lower() for f in convertible}
-        
-        success, skipped, failed = convert_all_files(
-            contents_dir, 
-            args.format,
+        success, skipped, failed, ext_mappings = convert_all_files(
+            contents_dir,
             keep_originals=args.keep_originals
         )
         print(f"\n✓ Converted: {success}, Skipped: {skipped}, Failed: {failed}")
@@ -335,23 +354,27 @@ Examples:
     # Step 2: Patch database
     if not args.convert_only:
         print("\n📝 Patching database...")
-        new_ext = f".{args.format}"
         
-        # Patch all convertible extensions
+        # Use mappings from conversion, or scan for defaults if patch-only
+        if not ext_mappings:
+            # Patch-only mode: try all known convertible formats
+            for old_ext in CONVERTIBLE_FORMATS:
+                target = get_target_format(old_ext)
+                if target:
+                    ext_mappings[old_ext] = f".{target}"
+        
         patched_any = False
-        for old_ext in sorted(converted_exts or CONVERTIBLE_FORMATS):
-            if len(old_ext) == len(new_ext):
-                if patch_pdb(pdb_path, old_ext, new_ext):
-                    patched_any = True
-            else:
-                print(f"⚠️  Cannot patch {old_ext} → {new_ext} (different lengths)")
+        for old_ext, new_ext in sorted(ext_mappings.items()):
+            if patch_pdb(pdb_path, old_ext, new_ext):
+                patched_any = True
         
         if patched_any:
             print("\n✅ Done! USB is ready for CDJ.")
         else:
-            print("\n⚠️  No extensions were patched.")
+            print("\n✅ Done! No database changes needed.")
 
 
 if __name__ == "__main__":
     main()
+
 
