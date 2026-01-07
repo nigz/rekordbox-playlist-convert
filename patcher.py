@@ -66,7 +66,7 @@ def find_audio_files(contents_dir: Path) -> Tuple[List[Path], List[Path], Set[st
     compatible = []
     folder_count = 0
     
-    print("Scanning for audio files", end="", flush=True)
+    print(f"Scanning: {contents_dir}", end="", flush=True)
     
     # Use os.walk for fast traversal (faster than glob on USB)
     for root, dirs, files in os.walk(contents_dir):
