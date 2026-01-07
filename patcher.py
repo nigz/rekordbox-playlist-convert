@@ -210,7 +210,6 @@ def convert_all_files(contents_dir: Path, keep_originals: bool = False, max_work
         return success, name, target_format
     
     # Run conversions in parallel
-    import sys
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(do_convert, f): f for f in convertible}
         
@@ -220,16 +219,11 @@ def convert_all_files(contents_dir: Path, keep_originals: bool = False, max_work
             
             if success:
                 success_count += 1
-                status = f"✓ [{done}/{total}] {name}"
+                print(f"✓ [{done}/{total}] {name}", flush=True)
             else:
                 fail_count += 1
                 failed_files.append(name)
-                status = f"✗ [{done}/{total}] {name} (FAILED)"
-            
-            # Clear line and print status
-            print(f"\r{status:<80}", flush=True)
-    
-    print()  # New line after progress
+                print(f"✗ [{done}/{total}] {name} (FAILED)", flush=True)
     
     if failed_files:
         print(f"\n⚠️  Failed files: {', '.join(failed_files)}")
