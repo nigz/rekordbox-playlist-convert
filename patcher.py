@@ -225,6 +225,9 @@ def convert_all_files(contents_dir: Path, keep_originals: bool = False, max_work
         
         return success, name, error
     
+    # Print initial progress
+    print(f"[{'░' * 20}] 0/{total} (0%) - Starting...", end="", flush=True)
+    
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(convert_one, f) for f in convertible]
         
