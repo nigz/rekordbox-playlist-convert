@@ -68,6 +68,10 @@ def find_audio_files(contents_dir: Path) -> Tuple[List[Path], List[Path], Set[st
     for file in contents_dir.rglob("*"):
         if not file.is_file():
             continue
+        
+        # Skip macOS AppleDouble metadata files (._filename)
+        if file.name.startswith("._"):
+            continue
             
         ext = file.suffix.lower()
         
