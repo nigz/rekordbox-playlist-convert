@@ -420,29 +420,98 @@ def patch_pdb(file_path: Path, old_ext: str, new_ext: str) -> bool:
     
     with open(file_path, 'wb') as f:
         f.write(new_content)
-    
-    print(f"Patched {count} track reference(s): {old_ext} → {new_ext}")
+        print(f"Patched {count} track reference(s): {old_ext} → {new_ext}")
     return True
 
 
-def find_usb_paths(usb_path: Path) -> Tuple[Path, List[Path]]:
+def patch_anlz_files(anlz_dir: Path, ext_mappings: Dict[str, str]) -> int:
     """
-    Find the Contents and all relevant PDB paths from a USB root.
+    Patch all analysis files (DAT/EXT/2EX) in the directory to replace file extensions.
+    Handles both ASCII and UTF-16BE encodings.
+    
+    Args:
+        anlz_dir: Path to PIONEER/USBANLZ directory
+        ext_mappings: Dictionary of old_ext -> new_ext (e.g. {'.flac': '.aiff'})
+        
+    Returns:
+        Number of files patched
+    """
+    if not anlz_dir.exists():
+        return 0
+        
+    # Prepare replacement pairs (both ASCII and UTF-16BE)
+    replacements = []
+    for old_ext, new_ext in ext_mappings.items():
+        if len(old_ext) != len(new_ext):
+            continue
+            
+        # ASCII
+        replacements.append((old_ext.encode('utf-8'), new_ext.encode('utf-8')))
+        
+        # UTF-16BE (Rekordbox uses this in ANLZ files)
+        replacements.append((old_ext.encode('utf-16be'), new_ext.encode('utf-16be')))
+    
+    if not replacements:
+        return 0
+    
+    print(f"   Scanning analysis files in {anlz_dir.name}...")
+    patched_count = 0
+    
+    # Walk through all files in USBANLZ
+    # We look for .DAT, .EXT, .2EX files
+    for root, _, files in os.walk(anlz_dir):
+        for name in files:
+            if not any(name.endswith(ext) for ext in [".DAT", ".EXT", ".2EX"]):
+                continue
+                
+            file_path = Path(root) / name
+            try:
+                with open(file_path, 'rb') as f:
+                    content = f.read()
+                
+                new_content = content
+                changed = False
+                
+                for old_bytes, new_bytes in replacements:
+                    if old_bytes in new_content:
+                        new_content = new_content.replace(old_bytes, new_bytes)
+                        changed = True
+                
+                if changed:
+                    with open(file_path, 'wb') as f:
+                        f.write(new_content)
+                    patched_count += 1
+                    
+            except Exception as e:
+                print(f"   Warning: Failed to patch {name}: {e}")
+                
+    return patched_count
+
+
+def find_usb_paths(usb_path: Path) -> Tuple[Path, List[Path], Path]:
+    """
+    Find the Contents, all relevant PDB paths, and USBANLZ path from a USB root.
     
     Args:
         usb_path: Path to USB root (e.g., /Volumes/MY_USB)
         
     Returns:
-        Tuple of (contents_dir, list_of_pdb_paths)
+        Tuple of (contents_dir, list_of_pdb_paths, anlz_dir)
     """
     contents_dir = usb_path / "Contents"
     
     # Check casing for PIONEER/rekordbox
-    rekordbox_dir = usb_path / "PIONEER" / "rekordbox"
+    pioneer_dir = usb_path / "PIONEER"
+    if not pioneer_dir.exists():
+        # Try finding PIONEER case-insensitively if needed? 
+        # For now assume PIONEER is standard.
+        pass
+
+    rekordbox_dir = pioneer_dir / "rekordbox"
     if not rekordbox_dir.exists():
-        rekordbox_dir = usb_path / "PIONEER" / "Rekordbox"
+        rekordbox_dir = pioneer_dir / "Rekordbox"
     if not rekordbox_dir.exists():
-        rekordbox_dir = usb_path / "PIONEER" / "REKORDBOX"
+        rekordbox_dir = pioneer_dir / "REKORDBOX"
     
     pdb_paths = []
     if rekordbox_dir.exists():
@@ -451,7 +520,9 @@ def find_usb_paths(usb_path: Path) -> Tuple[Path, List[Path]]:
             if not pdb.name.endswith(".backup"):
                 pdb_paths.append(pdb)
     
-    return contents_dir, pdb_paths
+    anlz_dir = pioneer_dir / "USBANLZ"
+    
+    return contents_dir, pdb_paths, anlz_dir
 
 
 def main():
@@ -513,7 +584,7 @@ Examples:
         sys.exit(1)
     
     # Find paths
-    contents_dir, pdb_paths = find_usb_paths(args.usb_path)
+    contents_dir, pdb_paths, anlz_dir = find_usb_paths(args.usb_path)
     
     # Check FFmpeg if we need to convert
     if not args.patch_only:
@@ -549,9 +620,9 @@ Examples:
         if failed > 0 and not args.convert_only:
             print("Warning: Some files failed to convert. Database may be inconsistent.")
     
-    # Step 2: Patch Database
+    # Step 2: Patch Database and Analysis files
     if not args.convert_only:
-        print("\n📝 Patching database...")
+        print("\n📝 Patching databases and analysis files...")
         
         if not ext_mappings:
             # If we didn't run conversion, scan convertible files to infer what mappings are needed
@@ -574,7 +645,8 @@ Examples:
         if not ext_mappings:
             print("   No text mappings found/needed. Skipping patch.")
         else:
-            total_patched_files = 0
+            # Patch PDBs
+            total_patched_pdbs = 0
             for pdb_path in pdb_paths:
                 print(f"   Target: {pdb_path.name}")
                 patched_any = False
@@ -585,12 +657,22 @@ Examples:
                         patched_any = True
                 
                 if patched_any:
-                    total_patched_files += 1
+                    total_patched_pdbs += 1
             
-            if total_patched_files == 0:
-                print("   ⚠️  No changes made to any PDB files.")
+            # Patch ANLZ files
+            num_anlz_patched = 0
+            if anlz_dir.exists():
+                print(f"   Scanning analysis directory: {anlz_dir.name}")
+                num_anlz_patched = patch_anlz_files(anlz_dir, ext_mappings)
+                if num_anlz_patched > 0:
+                     print(f"   ✓ Patched {num_anlz_patched} analysis files (ASCII & UTF-16BE)")
+                else:
+                     print("   No analysis files needed patching.")
+
+            if total_patched_pdbs == 0 and num_anlz_patched == 0:
+                print("   ⚠️  No changes made to any files.")
             else:
-                print("   ✓ Database patching complete.")
+                print("   ✓ Patching complete.")
 
     print("\n✅ All done! USB is ready for CDJ.")
 
