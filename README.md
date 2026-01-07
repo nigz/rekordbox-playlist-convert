@@ -10,8 +10,9 @@ CDJ-2000 Nexus 1 and older players don't support FLAC. Re-importing to convert b
 
 This tool:
 1. Converts files on the USB using FFmpeg
-2. Patches the `export.pdb` database to update references
-3. Preserves all your cues and beatgrids perfectly
+2. Patches the `export.pdb` and `exportExt.pdb` databases to update references
+3. Updates `ANLZ` analysis files (fixing UTF-16BE paths) so waveforms load instantly
+4. Preserves all your cues and beatgrids perfectly
 
 **Format mapping** (based on extension length to preserve DB offsets):
 | Source | Target |
