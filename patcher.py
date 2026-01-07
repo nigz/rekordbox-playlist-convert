@@ -446,10 +446,9 @@ def find_usb_paths(usb_path: Path) -> Tuple[Path, List[Path]]:
     
     pdb_paths = []
     if rekordbox_dir.exists():
-        # We need to patch export.pdb AND exportExt.pdb (contains beatgrids)
-        for name in ["export.pdb", "exportExt.pdb"]:
-            pdb = rekordbox_dir / name
-            if pdb.exists():
+        # Patch ALL PDB files (export.pdb, exportExt.pdb, export.modify.pdb, etc.)
+        for pdb in rekordbox_dir.glob("*.pdb"):
+            if not pdb.name.endswith(".backup"):
                 pdb_paths.append(pdb)
     
     return contents_dir, pdb_paths
