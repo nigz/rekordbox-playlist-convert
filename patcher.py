@@ -64,9 +64,16 @@ def find_audio_files(contents_dir: Path) -> Tuple[List[Path], List[Path], Set[st
     """
     convertible = []
     compatible = []
+    folder_count = 0
+    
+    print("Scanning for audio files", end="", flush=True)
     
     # Use os.walk for fast traversal (faster than glob on USB)
     for root, dirs, files in os.walk(contents_dir):
+        folder_count += 1
+        if folder_count % 50 == 0:  # Show progress every 50 folders
+            print(".", end="", flush=True)
+        
         for name in files:
             # Skip macOS metadata files
             if name.startswith("._"):
@@ -80,6 +87,7 @@ def find_audio_files(contents_dir: Path) -> Tuple[List[Path], List[Path], Set[st
             elif ext in COMPATIBLE_FORMATS:
                 compatible.append(filepath)
     
+    print(f" done! ({folder_count} folders)")
     return convertible, compatible, set()
 
 
