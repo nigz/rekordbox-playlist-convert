@@ -520,6 +520,8 @@ def find_usb_paths(usb_path: Path) -> Tuple[Path, List[Path], Path]:
     if rekordbox_dir.exists():
         # Patch ALL PDB files (export.pdb, exportExt.pdb, export.modify.pdb, etc.)
         for pdb in rekordbox_dir.glob("*.pdb"):
+            if pdb.name.startswith("._"):
+                continue
             if not pdb.name.endswith(".backup"):
                 pdb_paths.append(pdb)
     
