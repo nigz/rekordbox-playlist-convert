@@ -1,19 +1,16 @@
 # Next Steps: Finishing Polish
 
 ## 1. Fix "File Type" Display
-**Status**: [X] Completed
+**Status**: [~] Partially Fixed / Known Limitation
 **Findings**: 
-1. The "File Type ID" in `export.pdb` uses a two-byte pattern: `03 05 [ID] 05 [SEC_ID]`. 
-   - FLAC/Compressed: Can be `03 05 35 05 32` OR `03 05 33 05 32`.
-   - AIFF: `03 05 34 05 34` ('4' then '4')
-2. "Wenu Wenu.flac" used the ID `0x33` which was previously unhandled.
+1. The "File Type ID" bytes (`0x35`/`0x33` for FLAC/MP3, `0x34` for AIFF) can be patched.
+2. However, **native AIFF records** have a slightly different binary structure (an extra `0x03` byte in the header: `00 03 03 05...` vs `00 03 05...`).
+3. Analysis files (`USBANLZ`) were scanned and confirmed to **NOT** contain file type IDs.
+4. Structural differences in `export.pdb` prevent a perfect visual fix (cannot insert bytes without breaking DB).
 
-**Resolution**: 
-1. Updated `patcher.py` to ALL compressed IDs (`0x35`, `0x33`, etc.) to `0x34` (AIFF) for any file with `.aiff` extension.
-2. It correctly sets the pattern to `03 05 34 05 34`, matching native AIFF tracks identically.
+**Conclusion**: The files play correctly and function as AIFFs. The "File Type: FLAC" display is a visual artifact of the original database record structure.
 
-**Action**: You should re-run the patcher on your USB to apply the fix:
-`python3 patcher.py /Volumes/YOUR_USB --patch-only`
+**Action**: No further action recommended. The script now ensures the best possible compatibility by patching the ID bytes.
 
 ## 2. Display Detected Playlists
 **Goal**: The script should list the names of playlists found on the USB (e.g., "PHASE") to confirm what is being processed.
