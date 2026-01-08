@@ -424,6 +424,76 @@ def patch_pdb(file_path: Path, old_ext: str, new_ext: str) -> bool:
     return True
 
 
+def patch_pdb_types(file_path: Path) -> int:
+    """
+    Patch the "File Type ID" in export.pdb.
+    Based on analysis of 'Acid Phase' (FLAC->AIFF) vs 'Peia' (Native AIFF):
+      Acid Phase: 03 05 35 05 32 ...
+      Peia:       03 05 34 05 34 ...
+    
+    We need to patch BOTH:
+      1. The Main ID: 0x35 ('5') -> 0x34 ('4')
+      2. The Secondary ID: 0x32 ('2') -> 0x34 ('4')  (if present)
+      
+    Args:
+        file_path: Path to the export.pdb file
+        
+    Returns:
+        Number of entries patched
+    """
+    if not file_path.exists():
+        return 0
+        
+    with open(file_path, 'rb') as f:
+        content = bytearray(f.read())
+    
+    patched_count = 0
+    i = 0
+    length = len(content)
+    
+    # Scan for 03 05 XX 05 YY
+    while i < length - 6:
+        if content[i] == 0x03 and content[i+1] == 0x05:
+            # Found header start 03 05
+            
+            type_id = content[i+2] # 0x35 (FLAC) or 0x34 (AIFF) or others
+            separator = content[i+3] # Should be 0x05
+            sec_id = content[i+4] # Secondary ID? (0x32 for FLAC?, 0x34 for AIFF)
+            
+            if separator == 0x05:
+                # Look ahead for ".aiff" within reasonable range
+                search_limit = min(length, i + 500)
+                window = content[i:search_limit]
+                is_aiff_file = b".aiff" in window or b".AIFF" in window
+                
+                if is_aiff_file:
+                    changed = False
+                    
+                    # Fix Main ID (FLAC 5 -> AIFF 4)
+                    if type_id == 0x35:
+                        content[i+2] = 0x34
+                        changed = True
+                    
+                    # Fix Secondary ID (Wave/Something 2 -> AIFF 4)
+                    # We consistently see 0x34 0x05 0x34 in correct AIFFs
+                    # And 0x35 0x05 0x32 in FLACs (before Main ID patch)
+                    # Or 0x34 0x05 0x32 (after Main ID patch)
+                    if content[i+4] == 0x32:
+                        content[i+4] = 0x34
+                        changed = True
+                        
+                    if changed:
+                        patched_count += 1
+        
+        i += 1
+        
+    if patched_count > 0:
+        with open(file_path, 'wb') as f:
+            f.write(content)
+            
+    return patched_count
+
+
 def patch_anlz_files(anlz_dir: Path, ext_mappings: Dict[str, str]) -> int:
     """
     Patch all analysis files (DAT/EXT/2EX) in the directory to replace file extensions.
@@ -657,6 +727,12 @@ Examples:
                         patched_any = True
                 
                 if patched_any:
+                    total_patched_pdbs += 1
+                
+                # Patch File Type IDs (FLAC -> AIFF)
+                type_fixes = patch_pdb_types(pdb_path)
+                if type_fixes > 0:
+                    print(f"   ✓ Fixed {type_fixes} File Type IDs (FLAC→AIFF)")
                     total_patched_pdbs += 1
             
             # Patch ANLZ files
