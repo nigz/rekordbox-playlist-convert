@@ -23,4 +23,5 @@ example/
 example_test/
 example_unmodified/
 example_modified/
-example*
+example_old/
+example_new/

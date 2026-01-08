@@ -456,9 +456,9 @@ def patch_pdb_types(file_path: Path) -> int:
         if content[i] == 0x03 and content[i+1] == 0x05:
             # Found header start 03 05
             
-            type_id = content[i+2] # 0x35 (FLAC) or 0x34 (AIFF) or others
+            type_id = content[i+2] # Current ID (0x35=FLAC, 0x33=MP3?, 0x34=AIFF)
             separator = content[i+3] # Should be 0x05
-            sec_id = content[i+4] # Secondary ID? (0x32 for FLAC?, 0x34 for AIFF)
+            sec_id = content[i+4] # Secondary ID
             
             if separator == 0x05:
                 # Look ahead for ".aiff" within reasonable range
@@ -469,16 +469,14 @@ def patch_pdb_types(file_path: Path) -> int:
                 if is_aiff_file:
                     changed = False
                     
-                    # Fix Main ID (FLAC 5 -> AIFF 4)
-                    if type_id == 0x35:
+                    # Force Main ID to 0x34 (AIFF)
+                    if type_id != 0x34:
                         content[i+2] = 0x34
                         changed = True
                     
-                    # Fix Secondary ID (Wave/Something 2 -> AIFF 4)
-                    # We consistently see 0x34 0x05 0x34 in correct AIFFs
-                    # And 0x35 0x05 0x32 in FLACs (before Main ID patch)
-                    # Or 0x34 0x05 0x32 (after Main ID patch)
-                    if content[i+4] == 0x32:
+                    # Force Secondary ID to 0x34 (AIFF)
+                    # Correct AIFF pattern is 03 05 34 05 34
+                    if content[i+4] != 0x34:
                         content[i+4] = 0x34
                         changed = True
                         
