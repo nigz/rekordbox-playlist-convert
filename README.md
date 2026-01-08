@@ -66,6 +66,13 @@ The script uses two strategies to handle slow USB write speeds:
 2. Run: `python patcher.py /Volumes/YOUR_USB`
 3. Eject and plug into your CDJ ✅
 
+
+## Known Issues
+
+### File Type Display
+
+The "File Type: FLAC" display is a visual artifact of the original database record structure. The files play correctly and function as AIFFs.
+
 ## License
 
 MIT
