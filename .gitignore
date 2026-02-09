@@ -25,3 +25,6 @@ example_unmodified/
 example_modified/
 example_old/
 example_new/
+search*
+notes.md
+NEXT_STEPS.md
