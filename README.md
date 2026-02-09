@@ -2,9 +2,17 @@
 
 Convert audio files on Rekordbox USB exports for CDJ compatibility while preserving all hot cues, memory points, and beatgrids.
 
+## IMPORTANT: This it not tested enough
+
+I have not yet been able to test this on CDJs/XDJs. It works perfectly on Rekordbox for Mac but I have no Access to Standalones at the moment. If you are able to test it feel free to contact me and report.
+
 ## The Problem
 
 CDJ-2000 Nexus 1 and older players don't support FLAC. Re-importing to convert breaks your carefully set cue points.
+
+## Limitations
+
+This does only work for the old device library. AFAIK every device that needs the new library plus should also support FLAC out of the box so it should not be needed there.
 
 ## The Solution
 
