@@ -264,12 +264,31 @@ def _convert_on_device(convertible: List[Path], total: int, workers: int, keep_o
 def _convert_with_ssd_cache(convertible: List[Path], contents_dir: Path, total: int, workers: int, keep_originals: bool, compatible: List[Path], ext_mappings: Dict[str, str]) -> Tuple[int, int, int, Dict[str, str]]:
     """Convert files using local SSD for speed, then copy to USB."""
     
+    # Skip files where the target already exists on USB (resume support)
+    to_convert = []
+    skipped_existing = 0
+    for audio_file in convertible:
+        target_format = get_target_format(audio_file.suffix)
+        usb_dest = audio_file.with_suffix(f".{target_format}")
+        if usb_dest.exists() and usb_dest.stat().st_size > 0:
+            skipped_existing += 1
+        else:
+            to_convert.append(audio_file)
+    
+    if skipped_existing > 0:
+        print(f"\n⏩ Resuming: skipped {skipped_existing} already-converted file(s)")
+    
+    if not to_convert:
+        print("All files already converted on USB. Nothing to do.")
+        return skipped_existing, len(compatible), 0, ext_mappings
+    
     # Create temp directory in script folder
     script_dir = Path(__file__).parent
     temp_dir = script_dir / ".convert_cache"
     temp_dir.mkdir(exist_ok=True)
     
-    print(f"\n Converting {total} file(s) (Cached, {workers} workers)...")
+    total_to_convert = len(to_convert)
+    print(f"\n Converting {total_to_convert} file(s) (Cached, {workers} workers)...")
     print(f"   Cache: {temp_dir}\n")
     
     success_count = 0
@@ -326,10 +345,10 @@ def _convert_with_ssd_cache(convertible: List[Path], contents_dir: Path, total: 
             return False, audio_file.name, "Timeout", temp_file, usb_dest
     
     # Step 1: Convert all files to SSD (fast, parallel)
-    print(f"[{'░' * 20}] 0/{total} (0%) - Starting...", end="", flush=True)
+    print(f"[{'░' * 20}] 0/{total_to_convert} (0%) - Starting...", end="", flush=True)
     
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(convert_one, f) for f in convertible]
+        futures = [executor.submit(convert_one, f) for f in to_convert]
         for future in as_completed(futures):
             success, name, error, temp_file, usb_dest = future.result()
             if success:
@@ -353,14 +372,22 @@ def _convert_with_ssd_cache(convertible: List[Path], contents_dir: Path, total: 
         print(f"\nCopying {len(converted_files)} file(s) to USB...")
         print(f"[{'░' * 20}] 0/{len(converted_files)} (0%)", end="", flush=True)
         
+        copy_failed = 0
         for i, (temp_file, usb_dest) in enumerate(converted_files, 1):
-            shutil.copy2(temp_file, usb_dest)
+            try:
+                shutil.copy(temp_file, usb_dest)
+            except OSError as e:
+                copy_failed += 1
+                print(f"\n   ⚠️  Copy failed: {usb_dest.name}: {e}")
             
             pct = int(i / len(converted_files) * 100)
             bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
             print(f"\r[{bar}] {i}/{len(converted_files)} ({pct}%)", end="", flush=True)
         
         print()
+        if copy_failed > 0:
+            print(f"   ⚠️  {copy_failed} file(s) failed to copy")
+            fail_count += copy_failed
         
         # Step 3: Delete originals from USB (if not keeping)
         if not keep_originals:
@@ -373,7 +400,7 @@ def _convert_with_ssd_cache(convertible: List[Path], contents_dir: Path, total: 
         print("🧹 Cleaning up cache...")
         shutil.rmtree(temp_dir, ignore_errors=True)
     
-    return success_count, len(compatible), fail_count, ext_mappings
+    return success_count + skipped_existing, len(compatible), fail_count, ext_mappings
 
 
 def patch_pdb(file_path: Path, old_ext: str, new_ext: str) -> bool:

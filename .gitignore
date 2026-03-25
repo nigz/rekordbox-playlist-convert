@@ -28,3 +28,4 @@ example_new/
 search*
 notes.md
 NEXT_STEPS.md
+.convert_cache
