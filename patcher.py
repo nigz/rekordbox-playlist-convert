@@ -264,39 +264,51 @@ def _convert_on_device(convertible: List[Path], total: int, workers: int, keep_o
 def _convert_with_ssd_cache(convertible: List[Path], contents_dir: Path, total: int, workers: int, keep_originals: bool, compatible: List[Path], ext_mappings: Dict[str, str]) -> Tuple[int, int, int, Dict[str, str]]:
     """Convert files using local SSD for speed, then copy to USB."""
     
-    # Skip files where the target already exists on USB (resume support)
-    to_convert = []
-    skipped_existing = 0
-    for audio_file in convertible:
-        target_format = get_target_format(audio_file.suffix)
-        usb_dest = audio_file.with_suffix(f".{target_format}")
-        if usb_dest.exists() and usb_dest.stat().st_size > 0:
-            skipped_existing += 1
-        else:
-            to_convert.append(audio_file)
-    
-    if skipped_existing > 0:
-        print(f"\n⏩ Resuming: skipped {skipped_existing} already-converted file(s)")
-    
-    if not to_convert:
-        print("All files already converted on USB. Nothing to do.")
-        return skipped_existing, len(compatible), 0, ext_mappings
-    
-    # Create temp directory in script folder
+    # Create temp directory in script folder (needed for resume check)
     script_dir = Path(__file__).parent
     temp_dir = script_dir / ".convert_cache"
     temp_dir.mkdir(exist_ok=True)
     
+    # Resume support: skip files already on USB or already in cache
+    to_convert = []
+    skipped_usb = 0
+    cached_ready: List[Tuple[Path, Path]] = []  # (temp_file, usb_dest) already converted in cache
+    for audio_file in convertible:
+        target_format = get_target_format(audio_file.suffix)
+        usb_dest = audio_file.with_suffix(f".{target_format}")
+        rel_path = audio_file.relative_to(contents_dir)
+        temp_file = temp_dir / rel_path.with_suffix(f".{target_format}")
+        
+        if usb_dest.exists() and usb_dest.stat().st_size > 0:
+            # Already converted and copied to USB
+            skipped_usb += 1
+        elif temp_file.exists() and temp_file.stat().st_size > 0:
+            # Already converted in cache, just needs copying to USB
+            cached_ready.append((temp_file, usb_dest))
+        else:
+            to_convert.append(audio_file)
+    
+    if skipped_usb > 0:
+        print(f"\n⏩ Resuming: skipped {skipped_usb} already on USB")
+    if cached_ready:
+        print(f"⏩ Resuming: {len(cached_ready)} file(s) found in cache, ready to copy")
+    
+    if not to_convert and not cached_ready:
+        print("All files already converted. Nothing to do.")
+        return skipped_usb, len(compatible), 0, ext_mappings
+    
     total_to_convert = len(to_convert)
-    print(f"\n Converting {total_to_convert} file(s) (Cached, {workers} workers)...")
-    print(f"   Cache: {temp_dir}\n")
+    
+    if total_to_convert > 0:
+        print(f"\n Converting {total_to_convert} file(s) (Cached, {workers} workers)...")
+        print(f"   Cache: {temp_dir}\n")
     
     success_count = 0
     fail_count = 0
     failed_files: List[str] = []
     errors: List[str] = []
     completed = [0]
-    converted_files: List[Tuple[Path, Path]] = []  # (temp_file, usb_dest)
+    converted_files: List[Tuple[Path, Path]] = list(cached_ready)  # start with cached files
     
     import threading
     lock = threading.Lock()
@@ -331,10 +343,10 @@ def _convert_with_ssd_cache(convertible: List[Path], contents_dir: Path, total: 
             
             with lock:
                 completed[0] += 1
-                pct = int(completed[0] / total * 100)
+                pct = int(completed[0] / total_to_convert * 100)
                 bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
                 short_name = audio_file.name[:30] if len(audio_file.name) <= 30 else audio_file.name[:27] + "..."
-                print(f"\r[{bar}] {completed[0]}/{total} ({pct}%) - {short_name:<30}", end="", flush=True)
+                print(f"\r[{bar}] {completed[0]}/{total_to_convert} ({pct}%) - {short_name:<30}", end="", flush=True)
             
             return True, audio_file.name, "", temp_file, usb_dest
             
@@ -344,23 +356,24 @@ def _convert_with_ssd_cache(convertible: List[Path], contents_dir: Path, total: 
         except subprocess.TimeoutExpired:
             return False, audio_file.name, "Timeout", temp_file, usb_dest
     
-    # Step 1: Convert all files to SSD (fast, parallel)
-    print(f"[{'░' * 20}] 0/{total_to_convert} (0%) - Starting...", end="", flush=True)
-    
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(convert_one, f) for f in to_convert]
-        for future in as_completed(futures):
-            success, name, error, temp_file, usb_dest = future.result()
-            if success:
-                success_count += 1
-                converted_files.append((temp_file, usb_dest))
-            else:
-                fail_count += 1
-                failed_files.append(name)
-                if error:
-                    errors.append(f"{name}: {error[:50]}")
-    
-    print()
+    # Step 1: Convert remaining files to SSD (fast, parallel)
+    if to_convert:
+        print(f"[{'░' * 20}] 0/{total_to_convert} (0%) - Starting...", end="", flush=True)
+        
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(convert_one, f) for f in to_convert]
+            for future in as_completed(futures):
+                success, name, error, temp_file, usb_dest = future.result()
+                if success:
+                    success_count += 1
+                    converted_files.append((temp_file, usb_dest))
+                else:
+                    fail_count += 1
+                    failed_files.append(name)
+                    if error:
+                        errors.append(f"{name}: {error[:50]}")
+        
+        print()
     
     if fail_count > 0:
         print(f"\n⚠️  Failed: {fail_count} file(s)")
@@ -400,7 +413,7 @@ def _convert_with_ssd_cache(convertible: List[Path], contents_dir: Path, total: 
         print("🧹 Cleaning up cache...")
         shutil.rmtree(temp_dir, ignore_errors=True)
     
-    return success_count + skipped_existing, len(compatible), fail_count, ext_mappings
+    return success_count + skipped_usb + len(cached_ready), len(compatible), fail_count, ext_mappings
 
 
 def patch_pdb(file_path: Path, old_ext: str, new_ext: str) -> bool:
