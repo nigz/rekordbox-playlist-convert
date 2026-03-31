@@ -18,8 +18,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # Formats that need conversion to AIFF (5 chars → 5 chars)
 CONVERT_TO_AIFF = {".flac", ".alac"}
 
-# Formats that need conversion to MP3 (4 chars → 4 chars)  
+# Formats that need conversion to MP3 (4 chars → 4 chars)
 CONVERT_TO_MP3 = {".m4a", ".ogg", ".wma"}
+
+# PDB format-type code patches: binary patterns that encode the file kind.
+# Each track record contains a tagged-field sequence \x03\x05[CODE1]\x05[CODE2]\x03
+# that tells rekordbox which audio format the file uses. These must be updated
+# alongside the file-extension patch so the player recognises the new format.
+# Discovered by binary-diffing example_new/unmodified vs example_new/modified.
+PDB_FORMAT_CODE_PATCHES: Dict[Tuple[str, str], Tuple[bytes, bytes]] = {
+    (".flac", ".aiff"): (b"\x03\x05\x33\x05\x32\x03", b"\x03\x05\x34\x05\x34\x03"),
+    # ALAC codes unknown (no sample data); add entry once a sample PDB is available.
+}
 
 # Formats already compatible (no conversion needed)
 COMPATIBLE_FORMATS = {".mp3", ".aiff", ".aif", ".wav"}
@@ -457,7 +467,16 @@ def patch_pdb(file_path: Path, old_ext: str, new_ext: str) -> bool:
         return False
     
     new_content = content.replace(old_bytes, new_bytes)
-    
+
+    # Patch the binary format-type codes so the player knows the new container format.
+    fmt_key = (old_ext.lower(), new_ext.lower())
+    if fmt_key in PDB_FORMAT_CODE_PATCHES:
+        old_fmt, new_fmt = PDB_FORMAT_CODE_PATCHES[fmt_key]
+        fmt_count = new_content.count(old_fmt)
+        if fmt_count > 0:
+            new_content = new_content.replace(old_fmt, new_fmt)
+            print(f"Patched {fmt_count} format-type code(s): {old_fmt.hex()} → {new_fmt.hex()}")
+
     with open(file_path, 'wb') as f:
         f.write(new_content)
         print(f"Patched {count} track reference(s): {old_ext} → {new_ext}")
